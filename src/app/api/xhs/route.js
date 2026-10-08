@@ -109,6 +109,32 @@ function normalizeXhsUrl(url) {
   return url.trim();
 }
 
+const XHS_ALLOWED_HOSTS = ["xiaohongshu.com", "xhslink.com", "xhslink.cn"];
+
+function isAllowedXhsUrl(value) {
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    return (
+      (parsed.protocol === "https:" || parsed.protocol === "http:") &&
+      !parsed.username &&
+      !parsed.password &&
+      XHS_ALLOWED_HOSTS.some((domain) => host === domain || host.endsWith(`.${domain}`))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function safeUrlLocation(value) {
+  try {
+    const parsed = new URL(value);
+    return `${parsed.hostname.toLowerCase()}${parsed.pathname}`;
+  } catch {
+    return "unknown";
+  }
+}
+
 /**
  * 短链与笔记页：手动跟随重定向，兼容 xhslink.com 的 o/ 短链。
  * 每次响应吸收 set-cookie，后续请求自动携带（无 Cookie 时小红书易弹安全验证）。
@@ -116,6 +142,16 @@ function normalizeXhsUrl(url) {
  */
 async function fetchXhsNoteHtml(url, attempt = 1) {
   const target = normalizeXhsUrl(url);
+
+  if (!isAllowedXhsUrl(target)) {
+    return {
+      html: "",
+      finalUrl: target,
+      finalStatus: 0,
+      redirectCount: 0,
+      redirectBlocked: true,
+    };
+  }
 
   const doFetch = (u, referer) =>
     fetch(u, {
@@ -126,7 +162,8 @@ async function fetchXhsNoteHtml(url, attempt = 1) {
 
   try {
     // 第一步：请求短链/笔记页，手动处理重定向
-    let response = await doFetch(target, "");
+    let currentUrl = target;
+    let response = await doFetch(currentUrl, "");
     absorbXhsCookies(response);
 
     // 手动跟随重定向（最多跟 5 次），每步带上已吸收的 Cookie 与来源 Referer
@@ -138,14 +175,29 @@ async function fetchXhsNoteHtml(url, attempt = 1) {
     ) {
       const location = response.headers.get("location");
       if (!location) break;
-      const nextUrl = new URL(location, response.url).toString();
+      const nextUrl = new URL(location, response.url || currentUrl).toString();
+      if (!isAllowedXhsUrl(nextUrl)) {
+        console.warn(
+          "[xhs] blocked redirect to non-XHS host:",
+          safeUrlLocation(nextUrl)
+        );
+        return {
+          html: "",
+          finalUrl: currentUrl,
+          finalStatus: response.status,
+          redirectCount,
+          redirectBlocked: true,
+        };
+      }
       redirectCount++;
-      response = await doFetch(nextUrl, response.url);
+      const referer = response.url || currentUrl;
+      currentUrl = nextUrl;
+      response = await doFetch(currentUrl, referer);
       absorbXhsCookies(response);
     }
 
     const html = await response.text();
-    const finalUrl = response.url;
+    const finalUrl = response.url || currentUrl;
 
     // 已落到小红书域但缺页面数据：多半是首次无 Cookie 被风控，
     // 用已吸收的 Cookie 整条重试一次（二次请求通常能拿到正常笔记页）
@@ -154,14 +206,17 @@ async function fetchXhsNoteHtml(url, attempt = 1) {
       !html.includes("__INITIAL_STATE__") &&
       /xiaohongshu\.com|xhslink\.(com|cn)/.test(finalUrl)
     ) {
-      console.log("[xhs] retry with absorbed cookies, finalUrl:", finalUrl);
+      console.log(
+        "[xhs] retry with absorbed cookies, final:",
+        safeUrlLocation(finalUrl)
+      );
       return fetchXhsNoteHtml(url, 2);
     }
 
-    return { html, finalUrl };
+    return { html, finalUrl, finalStatus: response.status, redirectCount };
   } catch (error) {
     if (attempt === 1) {
-      console.log("[xhs] fetch error, retry once:", error.message);
+      console.log("[xhs] fetch error, retry once; errorType:", error?.name || "Error");
       return fetchXhsNoteHtml(url, 2);
     }
     throw error;
@@ -295,22 +350,6 @@ function extractXhsUserStats(decoded) {
   // 新版主页：interactions 数组按 type 区分
   // [{type:"follows",name:"关注",count:"10+"},{type:"fans",name:"粉丝",count:"1万+"},{type:"interaction",name:"获赞与收藏",count:"1万+"}]
   if (Array.isArray(pageData.interactions)) {
-    // 诊断：打印主页 interactions 原始项（type/count/i18nCount），便于核对映射
-    try {
-      console.log(
-        "[xhs] interactions raw:",
-        JSON.stringify(
-          pageData.interactions.map((i) => ({
-            type: i && i.type,
-            name: i && i.name,
-            count: i && i.count,
-            i18nCount: i && i.i18nCount,
-          }))
-        )
-      );
-    } catch {
-      /* debug only */
-    }
     // 脱敏模板判定：仅以「+」尾缀为信号。真实数据 831/2.5万/15.7万 不带 +，
     // 但同样带「万」单位，因此不能把单位本身当作脱敏特征。
     const isSanitized = (v) => typeof v === "string" && /[+＋]/.test(v);
@@ -379,25 +418,6 @@ function extractXhsUserStats(decoded) {
   return null;
 }
 
-/** 调试用：递归找到第一个同时含粉丝/关注等键的对象，帮助定位主页结构变化 */
-function findCountsHolder(obj, keys, depth = 0) {
-  if (!obj || typeof obj !== "object" || depth > 5) return null;
-  if (keys.some((k) => k in obj)) return obj;
-  for (const k of Object.keys(obj)) {
-    // 跳过超大列表字段，避免无谓深挖与输出爆炸
-    if (
-      ["notes", "noteList", "noteDetailMap", "noteMap", "comments"].includes(
-        k
-      )
-    ) {
-      continue;
-    }
-    const r = findCountsHolder(obj[k], keys, depth + 1);
-    if (r) return r;
-  }
-  return null;
-}
-
 /**
  * 从笔记 HTML 提取作者主页链接里的 xsec_token。
  * 小红书要求主页访问带专属 token，否则会被风控或返回错配用户数据，
@@ -455,23 +475,10 @@ async function fetchXhsProfileStats(userId, xsecToken = "") {
       (!stats.followingCount && !stats.followerCount && !stats.totalFavorited)
     ) {
       try {
-        const holder = findCountsHolder(decoded, [
-          "fans",
-          "followerCount",
-          "follows",
-          "followingCount",
-          "interactions",
-        ]);
         console.log(
           "[xhs] profile empty, topKeys:",
           Object.keys(decoded).join(",")
         );
-        if (holder) {
-          console.log(
-            "[xhs] profile holder sample:",
-            JSON.stringify(holder).slice(0, 800)
-          );
-        }
       } catch {
         /* debug only */
       }
@@ -486,7 +493,7 @@ async function fetchXhsProfileStats(userId, xsecToken = "") {
     }
     return stats;
   } catch (error) {
-    console.log("[xhs] profile stats failed:", error.message);
+    console.log("[xhs] profile stats failed; errorType:", error?.name || "Error");
     return null;
   }
 }
@@ -535,16 +542,22 @@ async function pickStableVideoUrl(entry) {
   // HEAD 全部失败不一定是链接不可用（CDN 可能拒绝 HEAD / 节点抽风），
   // 退回第一个候选让下游 video-proxy 用 GET 尝试，避免把可用的视频
   // 误判成“该内容不包含视频或图片”。
-  console.log("[xhs] all video HEAD failed, fallback:", candidates[0]);
+  console.log("[xhs] all video HEAD checks failed; using first candidate");
   return candidates[0];
 }
 
 async function xhs(url) {
   try {
-    const { html, finalUrl } = await fetchXhsNoteHtml(url);
+    const { html, finalUrl, finalStatus, redirectCount, redirectBlocked } =
+      await fetchXhsNoteHtml(url);
 
-    console.log("[xhs] finalUrl:", finalUrl);
-    console.log("[xhs] html length:", html?.length || 0);
+    console.log(
+      `[xhs] response status=${finalStatus || "n/a"} final=${safeUrlLocation(finalUrl)} redirects=${redirectCount} htmlLength=${html?.length || 0} cookieConfigured=${Boolean(XHS_COOKIE)}`
+    );
+
+    if (redirectBlocked) {
+      return output(400, "小红书短链跳转到了非支持域名，已出于安全原因拦截");
+    }
 
     if (!html) {
       return output(400, "请求失败，未获取到页面内容");
@@ -577,14 +590,16 @@ async function xhs(url) {
       if (
         /安全验证|请完成验证|__AC_NONCE__|geetest|verify|captcha/i.test(html)
       ) {
-        console.log("[xhs] blocked by safety check, finalUrl:", finalUrl);
+        console.log(
+          "[xhs] safety check detected; final:",
+          safeUrlLocation(finalUrl)
+        );
         return output(
           400,
           "小红书触发了安全验证，请稍后重试（或联系站长配置 XHS_COOKIE）"
         );
       }
-      // 尝试打印 HTML 片段帮助调试
-      console.log("[xhs] HTML preview:", html.substring(0, 500));
+      console.log("[xhs] initial state missing; htmlLength:", html.length);
       return output(400, "未找到页面数据，小红书可能更新了页面结构");
     }
 
@@ -594,7 +609,10 @@ async function xhs(url) {
     try {
       decoded = JSON.parse(jsonRaw);
     } catch (e) {
-      console.log("[xhs] JSON parse error:", e.message);
+      console.log(
+        "[xhs] JSON parse error; errorType:",
+        e instanceof Error ? e.name : "UnknownError"
+      );
       return output(400, "JSON数据解析失败");
     }
 
@@ -602,11 +620,34 @@ async function xhs(url) {
       return output(400, "数据格式错误");
     }
 
+    let finalPath = "";
+    try {
+      finalPath = new URL(finalUrl).pathname;
+    } catch {
+      /* handled by the payload checks below */
+    }
+    if (finalPath === "/login" || finalPath.startsWith("/login/")) {
+      console.log(
+        "[xhs] login redirect detected; stateKeys:",
+        Object.keys(decoded)
+      );
+      return output(
+        400,
+        "小红书将请求重定向到了登录页，当前服务器无法匿名访问；请稍后重试，或联系站点管理员配置有效的 XHS_COOKIE"
+      );
+    }
+
     const noteData = resolveNotePayload(decoded);
 
     if (!noteData || typeof noteData !== "object") {
-      console.log("[xhs] decoded keys:", Object.keys(decoded));
-      return output(400, "数据结构不匹配，请检查链接是否为有效的小红书内容");
+      console.log(
+        "[xhs] note payload missing; stateKeys:",
+        Object.keys(decoded)
+      );
+      return output(
+        400,
+        "已打开小红书页面，但未识别到笔记数据；页面可能要求登录或结构已更新"
+      );
     }
 
     // 安全地构建基础数据
@@ -714,7 +755,6 @@ async function xhs(url) {
     }
 
     if (videoUrl) {
-      console.log("[xhs] videoUrl:", videoUrl);
       // 视频内容
       data.cover = "";
       const imageList = noteData.imageList;
@@ -766,7 +806,10 @@ async function xhs(url) {
 
     return output(404, "该内容不包含视频或图片");
   } catch (error) {
-    logger.error("xhs parse error:", error);
+    logger.error(
+      "xhs parse error; errorType:",
+      error instanceof Error ? error.name : "UnknownError"
+    );
     return output(500, "服务器内部错误");
   }
 }

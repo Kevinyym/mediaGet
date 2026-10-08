@@ -386,6 +386,12 @@ GET /api/xhs?url=https://www.xiaohongshu.com/explore/66f8f8f8f8f8f8f8f8f8f8f8
 }
 ```
 
+**常见失败**:
+
+- 小红书将请求重定向到 `/login` 时，返回明确的登录/访问限制提示；站点管理员可配置有效的 `XHS_COOKIE` 后重新部署。
+- 短链重定向到非小红书域名时会被安全拦截。
+- 匿名请求被限制时，即使页面带有 `__INITIAL_STATE__`，也可能没有笔记数据；此时会提示登录或页面结构未识别。
+
 **响应示例 (图片)**:
 ```json
 {
@@ -917,7 +923,8 @@ BILIBILI_USER_AGENT=your_user_agent
 
 # 微博：自动游客模式，无需配置 Cookie（WEIBO_COOKIE 已废弃，勿再配置）
 
-# 小红书（可选）：数据中心 / 海外出口被风控时，配置登录 Cookie 可稳定解析
+# 小红书（可选）：数据中心 / 海外出口被风控或跳转登录页时，可配置登录态 Cookie
+# 只在服务端配置，Cookie 过期后需更新；日志不会输出 Cookie 值
 # XHS_COOKIE=your_cookie
 
 # Instagram（可选但强烈建议）：匿名请求已全面登录墙，需配置登录态 Cookie 才可稳定解析

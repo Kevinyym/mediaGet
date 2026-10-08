@@ -162,6 +162,55 @@ describe("parse route", () => {
     expect(json.data.images[0]).toContain("/api/image?url=");
   });
 
+  it("reports a Xiaohongshu login redirect clearly", async () => {
+    const shareUrl = "https://xhslink.cn/o/login-case";
+    const loginState = { login: { redirectPath: "/discovery/item/example" } };
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://www.xiaohongshu.com/login?redirectPath=%2Fdiscovery%2Fitem%2Fexample" },
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(`<html><script>window.__INITIAL_STATE__=${JSON.stringify(loginState)}</script></html>`)
+      );
+
+    const res = await GET(
+      new Request(
+        `http://127.0.0.1/api/parse?url=${encodeURIComponent(shareUrl)}`,
+        { headers: { "x-forwarded-for": "203.0.113.46" } }
+      )
+    );
+    const json = await res.json();
+
+    expect(json.code).toBe(400);
+    expect(json.msg).toContain("重定向到了登录页");
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("blocks a short-link redirect to a non-Xiaohongshu host", async () => {
+    global.fetch = vi.fn().mockResolvedValueOnce(
+      new Response(null, {
+        status: 302,
+        headers: { location: "http://127.0.0.1/internal" },
+      })
+    );
+
+    const res = await GET(
+      new Request(
+        `http://127.0.0.1/api/parse?url=${encodeURIComponent("https://xhslink.cn/o/redirect-case")}`,
+        { headers: { "x-forwarded-for": "203.0.113.47" } }
+      )
+    );
+    const json = await res.json();
+
+    expect(json.code).toBe(400);
+    expect(json.msg).toContain("非支持域名");
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("supports text= share-copy mode (parse-text capability merged in)", async () => {
     const shareText =
       "【测试笔记】复制打开小红书，看看 https://www.xiaohongshu.com/explore/65f0c0e5000000001203d2a3 的内容";
