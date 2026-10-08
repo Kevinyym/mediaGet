@@ -139,9 +139,9 @@ describe("parse route", () => {
         },
       },
     };
-    const stateWithUndefined = JSON.stringify(initialState).replace(
+    const stateWithUndefined = JSON.stringify(initialState).replace('"note":', 'note:').replace(
       '"desc":"正文包含 undefined 一词"',
-      '"desc":"正文包含 undefined 一词","optional":undefined'
+      '"desc":"正文包含 undefined 一词","optional":undefined,"tags":new Set(["video"])'
     );
     const pageHtml = `<html><script>window.__INITIAL_STATE__=${stateWithUndefined};window.extraPageScript = true;</script></html>`;
 

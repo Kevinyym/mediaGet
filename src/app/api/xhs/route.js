@@ -1,7 +1,7 @@
 import { TIMEOUT, UA_EDGE_WIN129 } from "@/lib/http";
 import { createApiHandler } from "@/lib/api-middleware";
 import { logger } from "@/lib/api-utils";
-import { extractInitialStateJson, prepareInitialStateJson, initialStateParseDiagnostic } from "@/lib/xhs-state";
+import { extractInitialStateJson, parseInitialState, initialStateParseDiagnostic } from "@/lib/xhs-state";
 
 export const runtime = "nodejs";
 
@@ -442,7 +442,7 @@ async function fetchXhsProfileStats(userId, xsecToken = "") {
     if (!jsonRaw) return null;
     let decoded;
     try {
-      decoded = JSON.parse(prepareInitialStateJson(jsonRaw));
+      decoded = parseInitialState(jsonRaw);
     } catch {
       return null;
     }
@@ -581,11 +581,9 @@ async function xhs(url) {
       return output(400, "未找到页面数据，小红书可能更新了页面结构");
     }
 
-    jsonRaw = prepareInitialStateJson(jsonRaw);
-
     let decoded;
     try {
-      decoded = JSON.parse(jsonRaw);
+      decoded = parseInitialState(jsonRaw);
     } catch (e) {
       console.log(
         "[xhs] JSON parse error:",
