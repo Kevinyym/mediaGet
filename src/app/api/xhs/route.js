@@ -1,6 +1,7 @@
 import { TIMEOUT, UA_EDGE_WIN129 } from "@/lib/http";
 import { createApiHandler } from "@/lib/api-middleware";
 import { logger } from "@/lib/api-utils";
+import { extractInitialStateJson, prepareInitialStateJson, initialStateParseDiagnostic } from "@/lib/xhs-state";
 
 export const runtime = "nodejs";
 
@@ -286,68 +287,6 @@ function resolveNotePayload(decoded) {
     safeGet(decoded, "note") ||
     null
   );
-}
-
-function extractInitialStateJson(html) {
-  // 取到下一个 </script>，避免对大段 JSON 做错误的非贪婪 `}` 截断
-  const re = /window\.__INITIAL_STATE__\s*=\s*(.*?)<\/script>/is;
-  const m = html.match(re);
-  if (m?.[1]) {
-    return m[1].trim();
-  }
-  // 兼容旧版 script 标签格式
-  const legacy =
-    /<script>\s*window\.__INITIAL_STATE__\s*=\s*([\s\S]*?)<\/script>/i.exec(
-      html
-    );
-  if (legacy?.[1]) {
-    return legacy[1].trim();
-  }
-  // 兼容单行 script 格式
-  const inline =
-    /<script[^>]*>\s*window\.__INITIAL_STATE__\s*=\s*([\s\S]*?)<\/script>/i.exec(
-      html
-    );
-  return inline?.[1]?.trim() ?? null;
-}
-
-/** 清理 __INITIAL_STATE__ 的 JS 赋值尾分号，并仅替换字符串外的裸 undefined。 */
-function prepareInitialStateJson(raw) {
-  const source = String(raw || "").trim().replace(/;\s*$/, "");
-  let output = "";
-  let inString = false;
-  let escaped = false;
-
-  for (let i = 0; i < source.length; i++) {
-    const char = source[i];
-    if (inString) {
-      output += char;
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-
-    if (char === '"') {
-      inString = true;
-      output += char;
-      continue;
-    }
-
-    if (source.startsWith("undefined", i)) {
-      const before = source[i - 1] || "";
-      const after = source[i + "undefined".length] || "";
-      if (!/[\w$]/.test(before) && !/[\w$]/.test(after)) {
-        output += "null";
-        i += "undefined".length - 1;
-        continue;
-      }
-    }
-
-    output += char;
-  }
-
-  return output;
 }
 
 /** 小红书计数归一化：兼容数字 / 数字字符串 / 尾随"+" / K(千) / 万 / 亿单位（"10+"、"1K+"、"10K+"、"1万+"、"1.2亿+"） */
@@ -649,7 +588,8 @@ async function xhs(url) {
       decoded = JSON.parse(jsonRaw);
     } catch (e) {
       console.log(
-        `[xhs] JSON parse error; errorType=${e instanceof Error ? e.name : "UnknownError"} stateLength=${jsonRaw.length} position=${String(e?.message || "").match(/position\s+(\d+)/i)?.[1] || "unknown"}`
+        "[xhs] JSON parse error:",
+        JSON.stringify(initialStateParseDiagnostic(e, jsonRaw))
       );
       return output(400, "JSON数据解析失败");
     }

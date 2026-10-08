@@ -143,7 +143,7 @@ describe("parse route", () => {
       '"desc":"正文包含 undefined 一词"',
       '"desc":"正文包含 undefined 一词","optional":undefined'
     );
-    const pageHtml = `<html><script>window.__INITIAL_STATE__=${stateWithUndefined};</script></html>`;
+    const pageHtml = `<html><script>window.__INITIAL_STATE__=${stateWithUndefined};window.extraPageScript = true;</script></html>`;
 
     global.fetch = vi.fn().mockResolvedValue(new Response(pageHtml));
 
