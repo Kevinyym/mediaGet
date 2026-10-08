@@ -126,7 +126,7 @@ describe("parse route", () => {
           [noteId]: {
             note: {
               title: "测试笔记",
-              desc: "测试描述",
+              desc: "正文包含 undefined 一词",
               user: { nickName: "测试作者", userId: "u1" },
               imageList: [
                 {
@@ -139,9 +139,11 @@ describe("parse route", () => {
         },
       },
     };
-    const pageHtml = `<html><script>window.__INITIAL_STATE__=${JSON.stringify(
-      initialState
-    )}</script></html>`;
+    const stateWithUndefined = JSON.stringify(initialState).replace(
+      '"desc":"正文包含 undefined 一词"',
+      '"desc":"正文包含 undefined 一词","optional":undefined'
+    );
+    const pageHtml = `<html><script>window.__INITIAL_STATE__=${stateWithUndefined};</script></html>`;
 
     global.fetch = vi.fn().mockResolvedValue(new Response(pageHtml));
 
@@ -157,7 +159,12 @@ describe("parse route", () => {
       code: 200,
       msg: "解析成功",
       platform: "redbook",
-      data: { type: "image", title: "测试笔记", author: "测试作者" },
+      data: {
+        type: "image",
+        title: "测试笔记",
+        desc: "正文包含 undefined 一词",
+        author: "测试作者",
+      },
     });
     expect(json.data.images[0]).toContain("/api/image?url=");
   });

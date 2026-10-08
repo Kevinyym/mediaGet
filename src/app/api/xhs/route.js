@@ -311,6 +311,45 @@ function extractInitialStateJson(html) {
   return inline?.[1]?.trim() ?? null;
 }
 
+/** 清理 __INITIAL_STATE__ 的 JS 赋值尾分号，并仅替换字符串外的裸 undefined。 */
+function prepareInitialStateJson(raw) {
+  const source = String(raw || "").trim().replace(/;\s*$/, "");
+  let output = "";
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < source.length; i++) {
+    const char = source[i];
+    if (inString) {
+      output += char;
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      output += char;
+      continue;
+    }
+
+    if (source.startsWith("undefined", i)) {
+      const before = source[i - 1] || "";
+      const after = source[i + "undefined".length] || "";
+      if (!/[\w$]/.test(before) && !/[\w$]/.test(after)) {
+        output += "null";
+        i += "undefined".length - 1;
+        continue;
+      }
+    }
+
+    output += char;
+  }
+
+  return output;
+}
+
 /** 小红书计数归一化：兼容数字 / 数字字符串 / 尾随"+" / K(千) / 万 / 亿单位（"10+"、"1K+"、"10K+"、"1万+"、"1.2亿+"） */
 function parseXhsCount(v) {
   if (v == null || v === "") return 0;
@@ -464,7 +503,7 @@ async function fetchXhsProfileStats(userId, xsecToken = "") {
     if (!jsonRaw) return null;
     let decoded;
     try {
-      decoded = JSON.parse(jsonRaw.replace(/undefined/g, "null"));
+      decoded = JSON.parse(prepareInitialStateJson(jsonRaw));
     } catch {
       return null;
     }
@@ -603,15 +642,14 @@ async function xhs(url) {
       return output(400, "未找到页面数据，小红书可能更新了页面结构");
     }
 
-    jsonRaw = jsonRaw.replace(/undefined/g, "null");
+    jsonRaw = prepareInitialStateJson(jsonRaw);
 
     let decoded;
     try {
       decoded = JSON.parse(jsonRaw);
     } catch (e) {
       console.log(
-        "[xhs] JSON parse error; errorType:",
-        e instanceof Error ? e.name : "UnknownError"
+        `[xhs] JSON parse error; errorType=${e instanceof Error ? e.name : "UnknownError"} stateLength=${jsonRaw.length} position=${String(e?.message || "").match(/position\s+(\d+)/i)?.[1] || "unknown"}`
       );
       return output(400, "JSON数据解析失败");
     }
