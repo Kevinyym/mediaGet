@@ -2,6 +2,7 @@ import { TIMEOUT, UA_EDGE_WIN129 } from "@/lib/http";
 import { createApiHandler } from "@/lib/api-middleware";
 import { logger } from "@/lib/api-utils";
 import { extractInitialStateJson, parseInitialState, initialStateParseDiagnostic } from "@/lib/xhs-state";
+import { collectXhsVideoUrls } from "@/lib/xhs-video";
 
 export const runtime = "nodejs";
 
@@ -488,40 +489,37 @@ function proxifyImage(url) {
 
 /**
  * 选取稳定可用的视频直链。
- * backupUrls 为裸直链（无短时效签名，长期有效），优先使用；
- * masterUrl 带约 30 分钟签名，仅作兜底。
+ * 原视频地址优先，其次遍历各路视频流的 backupUrls 和 masterUrl。
  * 统一转 https，避免 https 站点下 http 直链的 mixed content 问题。
  */
-async function pickStableVideoUrl(entry) {
-  if (!entry || typeof entry !== "object") return null;
-
-  const toHttps = (u) => (u ? u.replace(/^http:/i, "https:") : u);
-
-  const candidates = [];
-  if (Array.isArray(entry.backupUrls)) {
-    for (const u of entry.backupUrls) {
-      if (u) candidates.push(toHttps(u));
-    }
-  }
-  if (entry.masterUrl) candidates.push(toHttps(entry.masterUrl));
+async function pickStableVideoUrl(candidates) {
+  if (!candidates.length) return null;
+  const rejected = new Set();
+  const deadline = Date.now() + TIMEOUT.SHORT;
 
   // HEAD 轻量验证可用性（部分 CDN 节点 404，如 bak-v6），取第一个可用的
   for (const u of candidates) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
     try {
       const head = await fetch(u, {
         method: "HEAD",
-        signal: AbortSignal.timeout(TIMEOUT.SHORT),
+        signal: AbortSignal.timeout(Math.min(TIMEOUT.XS, remaining)),
       });
-      if (head.ok) return u;
+      const contentType = head.headers.get("content-type") || "";
+      if (head.status === 404 || head.status === 410 || (head.ok && /^(image\/|text\/html)/i.test(contentType))) {
+        rejected.add(u);
+      } else if (head.ok) return u;
     } catch {
       /* try next */
     }
   }
   // HEAD 全部失败不一定是链接不可用（CDN 可能拒绝 HEAD / 节点抽风），
-  // 退回第一个候选让下游 video-proxy 用 GET 尝试，避免把可用的视频
+  // 退回未被明确判为失效的候选，让下游 video-proxy 用 GET 尝试，避免把可用的视频
   // 误判成“该内容不包含视频或图片”。
-  console.log("[xhs] all video HEAD checks failed; using first candidate");
-  return candidates[0];
+  const fallback = candidates.find((u) => !rejected.has(u));
+  console.log(`[xhs] video HEAD checks inconclusive; fallbackAvailable=${Boolean(fallback)}`);
+  return fallback || null;
 }
 
 async function xhs(url) {
@@ -713,22 +711,16 @@ async function xhs(url) {
     }
 
     // 检查视频URL
-    let videoUrl = null;
-    const videoStream = safeGet(noteData, "video.media.stream");
-
-    if (videoStream && typeof videoStream === "object") {
-      // h264 优先（浏览器兼容性最好），h265 兜底；均优先取裸直链
-      const h264List = videoStream.h264;
-      if (Array.isArray(h264List) && h264List.length > 0 && h264List[0]) {
-        videoUrl = await pickStableVideoUrl(h264List[0]);
-      }
-      if (!videoUrl) {
-        const h265List = videoStream.h265;
-        if (Array.isArray(h265List) && h265List.length > 0 && h265List[0]) {
-          videoUrl = await pickStableVideoUrl(h265List[0]);
-        }
-      }
-    }
+    const videoCandidates = collectXhsVideoUrls(noteData);
+    const isVideoNote = noteData.type === "video" || videoCandidates.length > 0;
+    console.log("[xhs] media:", JSON.stringify({
+      noteType: ["video", "normal", "image"].includes(noteData.type) ? noteData.type : "unknown",
+      hasVideo: Boolean(noteData.video),
+      hasOriginKey: Boolean(safeGet(noteData, "video.consumer.originVideoKey") || safeGet(noteData, "video.consumer.origin_video_key")),
+      hasStream: Boolean(safeGet(noteData, "video.media.stream")),
+      candidateCount: videoCandidates.length,
+    }));
+    const videoUrl = await pickStableVideoUrl(videoCandidates);
 
     if (videoUrl) {
       // 视频内容
@@ -748,6 +740,11 @@ async function xhs(url) {
       data.url = videoUrl;
       data.type = "video";
       return output(200, "解析成功", data);
+    }
+
+    // 视频笔记的 imageList 是封面，不能作为图集返回。
+    if (isVideoNote) {
+      return output(400, "已识别为小红书视频笔记，但未获取到可用的视频地址，请稍后重试或更新 XHS_COOKIE");
     }
 
     // 检查图片内容

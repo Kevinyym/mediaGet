@@ -144,7 +144,8 @@ export default function VideoParserForm({
     async (url: string, platform: string, retryCount = 0) => {
       if (!url) return;
 
-      const cacheKey = `${platform}:${url}`;
+      // 小红书视频提取已更新，避免继续命中旧版误判为图集的会话缓存。
+      const cacheKey = `${platform === "xhs" ? "xhs:v2" : platform}:${url}`;
 
       // 命中缓存：直接返回，不发请求
       const cached = readCache(cacheKey);
