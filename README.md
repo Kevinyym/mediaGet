@@ -41,7 +41,7 @@
 
 ## 技术栈
 
-- Next.js 15（App Router）+ React 19，TypeScript / JavaScript 混合
+- Next.js 16（App Router）+ React 19，TypeScript / JavaScript 混合
 - Tailwind CSS；基于 shadcn/ui 规范的基础组件；Lucide 图标
 - 测试：Vitest（纯本地单测 + live 真机测试）
 - 部署：Vercel / Cloudflare Workers（OpenNext）/ Docker 均支持
