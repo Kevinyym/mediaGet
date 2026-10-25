@@ -1,4 +1,5 @@
 "use client";
+import { downloadMedia } from "@/utils/downloadMedia";
 import { useState } from "react";
 import Image from "next/image";
 import { ApiResponse, ParseData } from "@/types/api";
@@ -90,15 +91,7 @@ export default function WeiboVideo({ data }: WeiboVideoProps) {
     setDownloadingAll(true);
     videos.forEach((item, index) => {
       setTimeout(() => {
-        const url = `/api/video-proxy?url=${encodeURIComponent(
-          item.url
-        )}&download=1&filename=${encodeURIComponent(buildDownloadName(index))}`;
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+        void downloadMedia(item.url, buildDownloadName(index));
       }, index * 600);
     });
     setTimeout(() => setDownloadingAll(false), videos.length * 600);

@@ -2,6 +2,8 @@
 import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { Download, Music, Pause, Play } from "lucide-react";
+import DirectVideo from "./DirectVideo";
+import { downloadMedia } from "@/utils/downloadMedia";
 import { buildVideoProxyUrl } from "@/utils/videoProxy";
 import { Button } from "@/components/ui/button";
 import type { VideoPlatformKey } from "@/config/video-platforms";
@@ -12,11 +14,11 @@ import { useVideoMediaSession } from "./use-video-media-session";
  * 各平台复用此卡片，标题/作者等信息由各平台组件自行展示。
  *
  * 防盗链处理：小红书 xhscdn 视频直链有 Referer 防盗链，新窗口打开会 403。
- * 这里对需要代理的直链自动走 /api/video-proxy（带 Referer），保证可播放、可下载。
+ * 内嵌播放先直连，失败后走 /api/video-proxy；下载先尝试浏览器保存，失败后代理。
  *
  * 两种交互模式：
  * - inline=false（默认）：封面/播放/下载均为直链新窗口打开。
- * - inline=true：封面或「播放」按钮在当前页面内嵌 <video> 播放，下载按钮在当前页面触发真实下载。
+ * - inline=true：封面或「播放」按钮在当前页面内嵌 <video> 播放，下载按钮优先由浏览器直接获取并保存。
  *   适合已走代理或直链可直播的源（小红书 / B站），避免新开标签页，体验更好。
  *
  * 系统媒体会话（Media Session）：当前页内嵌播放时（inline 且播放器已展开）把封面与标题上报给
@@ -80,7 +82,7 @@ interface VideoPosterCardProps {
   onDownloadClick?: (index: number) => void;
   /** 是否显示「播放视频」按钮（默认 true；false 时封面自带点击 + 下方只剩下载） */
   showPlay?: boolean;
-  /** 内嵌播放模式：封面/播放按钮在当前页面内嵌 <video> 播放，下载走代理真实下载（适合已代理的源，如小红书） */
+  /** 内嵌播放模式：封面/播放按钮在当前页面内嵌 <video> 播放，下载优先直连，跨域失败后走代理 */
   inline?: boolean;
   /** 多分P列表（可选）：>1 时播放卡片内显示分P切换条，播放/封面/下载跟随当前分P */
   parts?: PosterPart[];
@@ -119,8 +121,8 @@ export default function VideoPosterCard({
   const activePart = partsList ? partsList[partIndex] : null;
   const currentUrl = activePart?.url || url;
   const currentCover = activePart?.cover || cover;
-  // 防盗链直链走代理，保证可播放、可下载
-  const playUrl = buildVideoProxyUrl(currentUrl);
+  // 内嵌播放先直连；外部打开无法监听错误，仍保留平台代理策略。
+  const playUrl = inline ? currentUrl : buildVideoProxyUrl(currentUrl);
   // 内嵌播放状态管理：
   // - expanded：播放器是否已展开（展开后封面隐藏）
   // - playing：是否实际在播放（由 <video> 的 play/pause 事件同步）
@@ -161,8 +163,7 @@ export default function VideoPosterCard({
     setPartIndex(i);
     if (inline && expanded && videoRef.current) {
       setPlayError(false);
-      videoRef.current.src = buildVideoProxyUrl(partsList[i].url);
-      videoRef.current.play().catch(() => {});
+      // React 更新 src；DirectVideo 会按新地址选择直连或代理。
     }
   };
 
@@ -232,7 +233,8 @@ export default function VideoPosterCard({
       {/* 内嵌播放器（inline 模式点击播放后展开，播放状态与按钮联动） */}
       {inline && expanded && (
         <div className="rounded-2xl overflow-hidden bg-black">
-          <video
+          <DirectVideo
+            key={currentUrl}
             ref={videoRef}
             src={playUrl}
             controls
@@ -330,15 +332,15 @@ export default function VideoPosterCard({
             <Download className="h-5 w-5" />
             {downloadText}
           </Button>
-        ) : inline && !playUrl.startsWith("/api/video-proxy") ? (
-          /* 内嵌模式 + 直链跨域：download 属性对跨域 URL 无效，走代理强制保存文件（抖音等） */
+        ) : inline ? (
           <Button asChild variant="outline" size="lg" className="flex-1">
             <a
-              href={`/api/video-proxy?url=${encodeURIComponent(
-                currentUrl
-              )}&download=1&filename=${encodeURIComponent(downloadName)}`}
-              target="_blank"
-              rel="noopener noreferrer">
+              href={currentUrl}
+              download={downloadName}
+              onClick={(event) => {
+                event.preventDefault();
+                void downloadMedia(currentUrl, downloadName);
+              }}>
               <Download className="h-5 w-5" />
               {downloadText}
             </a>

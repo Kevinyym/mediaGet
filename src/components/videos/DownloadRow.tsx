@@ -1,4 +1,5 @@
 "use client";
+import { handleMediaDownload } from "@/utils/downloadMedia";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import Image from "next/image";
 import { Check, ChevronDown, Download } from "lucide-react";
@@ -223,6 +224,7 @@ export default function DownloadRow({
           size="sm"
           className={`flex-shrink-0 bg-gradient-to-r ${gradient} hover:opacity-90`}>
           <a
+            onClick={handleMediaDownload}
             href={
               multiple
                 ? buildHref(activeQuality!.url, activeQuality!.label)

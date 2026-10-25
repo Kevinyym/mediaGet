@@ -7,7 +7,7 @@ import { formatCount } from "@/lib/format";
 import { TIMEOUT } from "@/lib/http";
 import { scrollToElement } from "@/lib/dom";
 import { sanitizeFilename } from "@/utils/filename";
-import { buildVideoProxyUrl } from "@/utils/videoProxy";
+import DirectVideo from "./DirectVideo";
 import PlatformIcon from "@/components/PlatformIcon";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -30,9 +30,8 @@ import DownloadRow from "./DownloadRow";
  * 该卡整体隐藏，页面以官方在线播放兜底（data.embedOnly=true 时给出提示）。
  *
  * 国内网络可达性（2026-09）：官方 iframe 依赖用户网络可达 YouTube（无法代理）；
- * 其余资源均经服务端转发 —— 头像/封面经 /api/image（代理失败回退直链），
- * 「直链播放」兜底与下载经 /api/video-proxy（googlevideo / pipedproxy 域由
- * utils/videoProxy 统一判定包装），被墙网络下播放与展示均可正常工作。
+ * 头像/封面与本地视频播放优先直连，加载失败后回退同源代理；
+ * 下载优先浏览器直连保存，跨域失败后使用同源代理。
  *
  * 兼容性：旧缓存/旧结果可能只有 data.url（无 videoId/embedUrl），此时回退通用
  * 直链卡片（VideoPosterCard）渲染，保证老数据仍可播放与下载。
@@ -41,25 +40,21 @@ import DownloadRow from "./DownloadRow";
 /** YouTube 品牌红渐变 */
 const YT_GRADIENT = "from-[#FF0000] to-[#ff4d4d]";
 
-/* === 图床代理（头像 / 封面） ===
- * YouTube 头像与封面均为 Google 图床（yt3.ggpht.com / i.ytimg.com 等），国内网络
- * 直连常被阻断 —— 一律先经 /api/image 服务端转发加载（Vercel 等海外部署可达上游，
- * 路由自带 6h LRU 缓存与防盗链 Referer 逻辑）；代理加载失败时回退直链，自建部署
- * 在可直连 Google 的网络下仍能正常显示。包装幂等：已代理路径原样返回。 */
+/* === 头像 / 封面：优先直连，网络不可达时回退代理 === */
 function proxifyImageUrl(url?: string): string {
   if (!url || !/^https?:\/\//i.test(url)) return url || "";
   if (url.startsWith("/api/image")) return url;
   return `/api/image?url=${encodeURIComponent(url)}`;
 }
 
-/** 经图片代理加载的 <Image>：代理地址失败（onError）自动回退原直链 */
+/** 封面直连优先，失败后仅回退一次同源图片代理。 */
 function YtImage(
   props: Omit<ImageProps, "src" | "unoptimized" | "onError"> & { src: string }
 ) {
   const { src, alt, ...rest } = props;
-  const [current, setCurrent] = useState(() => proxifyImageUrl(src));
+  const [current, setCurrent] = useState(src);
   useEffect(() => {
-    setCurrent(proxifyImageUrl(src));
+    setCurrent(src);
   }, [src]);
   return (
     <Image
@@ -68,7 +63,7 @@ function YtImage(
       alt={alt}
       unoptimized
       onError={() => {
-        if (current !== src) setCurrent(src);
+        if (current === src) setCurrent(proxifyImageUrl(src));
       }}
     />
   );
@@ -322,8 +317,7 @@ export default function YouTubeVideo({ data }: { data: ApiResponse }) {
   }, [expanded, mode]);
 
   // local 层：直链原生 <video> 播放（不经过 YouTube 服务器），挂载即可控。
-  // 直链为 googlevideo / pipedproxy 域，经 buildVideoProxyUrl 统一包装走
-  // /api/video-proxy 服务端转发 —— 被墙网络下浏览器连不上上游也能播放
+  // 本地视频先直连；网络不可达或上游拒绝时由 DirectVideo 回退代理。
   useEffect(() => {
     if (!expanded || mode !== "local") return;
     gotSignalRef.current = true;
@@ -685,10 +679,11 @@ export default function YouTubeVideo({ data }: { data: ApiResponse }) {
                 className="absolute inset-0 [&_iframe]:block [&_iframe]:h-full [&_iframe]:w-full"
               />
             ) : mode === "local" ? (
-              <video
+              <DirectVideo
+                key={videoUrl}
                 ref={videoRef}
                 className="absolute inset-0 h-full w-full"
-                src={buildVideoProxyUrl(videoUrl)}
+                src={videoUrl}
                 controls
                 autoPlay
                 playsInline
