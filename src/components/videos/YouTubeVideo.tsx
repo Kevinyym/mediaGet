@@ -52,10 +52,8 @@ function YtImage(
   props: Omit<ImageProps, "src" | "unoptimized" | "onError"> & { src: string }
 ) {
   const { src, alt, ...rest } = props;
-  const [current, setCurrent] = useState(src);
-  useEffect(() => {
-    setCurrent(src);
-  }, [src]);
+  const [failedSrc, setFailedSrc] = useState<string>();
+  const current = failedSrc === src ? proxifyImageUrl(src) : src;
   return (
     <Image
       {...rest}
@@ -63,7 +61,7 @@ function YtImage(
       alt={alt}
       unoptimized
       onError={() => {
-        if (current === src) setCurrent(proxifyImageUrl(src));
+        if (current === src) setFailedSrc(src);
       }}
     />
   );
