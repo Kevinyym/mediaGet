@@ -1,7 +1,7 @@
 # Cloudflare Workers 部署配置（OpenNext 方案，替代原 next-on-pages）
 # 构建：npm run build:cf → 产出 .open-next/ 目录（供 Cloudflare Git 集成构建使用）
 # 自动部署：Dashboard 关联本仓库后，Build command=npm run build:cf，
-# Deploy command=npx wrangler deploy；每次 push 到 main 由 Cloudflare 自动构建部署
+# Deploy command=npx opennextjs-cloudflare deploy；预览命令=npx wrangler preview
 name = "mediaget"
 main = ".open-next/worker.js"
 compatibility_date = "2025-08-14"
@@ -16,4 +16,10 @@ binding = "ASSETS"
 [vars]
 BILIBILI_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 # 功能开关：视频解析入口（/api/config 读取；值为 "true" 时放开）
+VIDEO_PARSE_ENABLED = "true"
+
+# 分支预览必须显式声明变量，不继承生产环境 vars。
+# Cookie、数据库等敏感配置在预览环境中单独设置。
+[previews.vars]
+BILIBILI_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 VIDEO_PARSE_ENABLED = "true"

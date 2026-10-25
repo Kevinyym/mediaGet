@@ -75,6 +75,7 @@ npm run test:live
 - **Vercel**：仓库导入即用。注意：TikTok 解析依赖 yt-dlp（child_process），Serverless 不可用；`/api/music` 的公共上游对数据中心出口会触发 CF 人机校验，需配置 `MUSIC_API_BASE(S)` 指向可直连的兼容实例（详见 `API.md`）。
 - **Cloudflare Workers**（OpenNext）：`npm run build:cf` 生成 `.open-next/`，`wrangler.toml` 已就绪；敏感 Cookie 在 Worker Settings → Variables and Secrets 配置（CI 已接入自动 `wrangler secret put`）。
   - Cloudflare Git 集成的构建命令设置为 `npm run build:cf`，部署命令设置为 `npx opennextjs-cloudflare deploy`。
+  - 非生产分支的 Preview command 设置为 `npx wrangler preview`；`wrangler.toml` 的 `[previews.vars]` 已声明预览变量。预览所需的敏感配置应在预览环境中单独设置。
   - `npm run build` 仅生成 Next.js 构建产物，不会生成部署到 Workers 所需的 `.open-next/worker.js`。
 - **Docker**（当前线上正式运行方式）：多阶段 `Dockerfile` 已内置 yt-dlp + ffmpeg（TikTok 解析需要），镜像以非 root 运行：
 
